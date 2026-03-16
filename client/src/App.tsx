@@ -8,17 +8,27 @@ import UploadPage from "@/pages/upload";
 import VideosListPage from "@/pages/videos-list";
 import VideoDetailPage from "@/pages/video-detail";
 import NotFound from "@/pages/not-found";
+import LandingPage from "@/pages/landing-page";
 
 function Router() {
   return (
-    <Layout>
-      <Switch>
-        <Route path="/" component={UploadPage} />
-        <Route path="/videos" component={VideosListPage} />
-        <Route path="/videos/:id" component={VideoDetailPage} />
-        <Route component={NotFound} />
-      </Switch>
-    </Layout>
+    <Switch>
+      <Route path="/" component={LandingPage} />
+      
+      {/* App Routes wrapped in Layout */}
+      <Route path="/app">
+        <Layout><UploadPage /></Layout>
+      </Route>
+      <Route path="/videos">
+        <Layout><VideosListPage /></Layout>
+      </Route>
+      <Route path="/videos/:id">
+        <Layout><VideoDetailPage /></Layout>
+      </Route>
+      <Route>
+        <Layout><NotFound /></Layout>
+      </Route>
+    </Switch>
   );
 }
 

@@ -12,12 +12,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <>
       <div className="flex items-center gap-2 mb-8 px-2">
         <Film className="h-6 w-6" />
-        <span className="text-xl font-bold tracking-tight">ClipExtractor</span>
+        <span className="text-xl font-bold tracking-tight">VoxClip AI</span>
       </div>
       <nav className="flex flex-col gap-2">
-        <Link href="/">
+        <Link href="/app">
           <Button
-            variant={location === "/" ? "secondary" : "ghost"}
+            variant={location === "/app" ? "secondary" : "ghost"}
             className="w-full justify-start gap-2"
             onClick={() => setIsOpen(false)}
           >
