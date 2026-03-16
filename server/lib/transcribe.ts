@@ -1,57 +1,32 @@
-// import fs from 'fs';
-// import OpenAI from "openai";
+/**
+ * Audio Transcription Service
+ * Primary: Google Gemini GenAI SDK
+ * Fallback: OpenAI Whisper → Heuristic
+ */
+import fs from "fs";
+import ffmpeg from "fluent-ffmpeg";
+import { isGeminiConfigured, geminiTranscribeAudio } from "./gemini";
 
-// const openai = new OpenAI({
-//   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-//   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-// });
+// Optional OpenAI client (lazy-initialized fallback)
+let openai: any = null;
+let openaiInitialized = false;
 
-// // export async function transcribeAudio(filePath: string): Promise<any[]> {
-// //   try {
-// //     const transcription = await openai.audio.transcriptions.create({
-// //       file: fs.createReadStream(filePath),
-// //       model: "gpt-4o-mini-transcribe",
-// //       response_format: "verbose_json",
-// //       timestamp_granularities: ["segment"],
-// //     });
-
-// //     // Map segments to our format
-// //     return transcription.segments?.map((seg: any) => ({
-// //       start: seg.start,
-// //       end: seg.end,
-// //       text: seg.text.trim(),
-// //     })) || [];
-// //   } catch (error) {
-// //     console.error("Transcription error:", error);
-// //     throw new Error("Failed to transcribe video");
-// //   }
-// // }
-// export async function transcribeAudio(_audioPath: string) {
-//   // TEMP STUB FOR HACKATHON DEMO (NO PAID API)
-//   return {
-//     text: "This is a placeholder transcript generated for demo purposes.",
-//     segments: [
-//       {
-//         start: 0,
-//         end: 3,
-//         text: "This is a high-value insight segment.",
-//       },
-//       {
-//         start: 3,
-//         end: 6,
-//         text: "This is another meaningful segment worth clipping.",
-//       },
-//     ],
-//   };
-// }
-import fs from 'fs';
-import OpenAI from "openai";
-import ffmpeg from 'fluent-ffmpeg';
-
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+async function getOpenAIClient(): Promise<any> {
+  if (openaiInitialized) return openai;
+  openaiInitialized = true;
+  try {
+    const OpenAI = (await import("openai")).default;
+    if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
+      openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+    }
+  } catch {
+    // OpenAI not available, that's fine
+  }
+  return openai;
+}
 
 interface TranscriptResult {
   text: string;
@@ -63,11 +38,11 @@ interface TranscriptResult {
 }
 
 /**
- * Get video duration using ffmpeg
+ * Get video/audio duration using ffmpeg
  */
-async function getVideoDuration(videoPath: string): Promise<number> {
+async function getAudioDuration(audioPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(videoPath, (err, metadata) => {
+    ffmpeg.ffprobe(audioPath, (err, metadata) => {
       if (err) reject(err);
       else resolve(metadata.format.duration || 0);
     });
@@ -75,22 +50,19 @@ async function getVideoDuration(videoPath: string): Promise<number> {
 }
 
 /**
- * Generate fallback transcript based on video duration
+ * Generate fallback transcript based on audio duration
  * Creates evenly spaced segments for demo/testing
  */
 async function generateFallbackTranscript(
   audioPath: string
 ): Promise<TranscriptResult> {
   try {
-    // Get actual video duration
-    const duration = await getVideoDuration(audioPath);
-    
-    console.log(`Generating fallback transcript for ${duration.toFixed(1)}s video`);
+    const duration = await getAudioDuration(audioPath);
+    console.log(`Generating fallback transcript for ${duration.toFixed(1)}s audio`);
 
-    // Generate segments every 5-10 seconds
-    const segments: TranscriptResult['segments'] = [];
-    const segmentInterval = 8; // 8 second intervals
-    
+    const segments: TranscriptResult["segments"] = [];
+    const segmentInterval = 8;
+
     const templates = [
       "This section discusses key insights and valuable information.",
       "Here we explore important concepts that viewers find engaging.",
@@ -109,28 +81,21 @@ async function generateFallbackTranscript(
 
     while (currentTime < duration) {
       const segmentEnd = Math.min(currentTime + segmentInterval, duration);
-      
       segments.push({
         start: currentTime,
         end: segmentEnd,
         text: templates[templateIndex % templates.length],
       });
-
       currentTime = segmentEnd;
       templateIndex++;
     }
 
-    const fullText = segments.map(s => s.text).join(" ");
-
     return {
-      text: fullText,
-      segments: segments,
+      text: segments.map((s) => s.text).join(" "),
+      segments,
     };
-
   } catch (error) {
     console.error("Fallback transcript generation failed:", error);
-    
-    // Ultra-simple fallback if even duration detection fails
     return {
       text: "This is a placeholder transcript for demonstration purposes.",
       segments: [
@@ -143,68 +108,115 @@ async function generateFallbackTranscript(
 }
 
 /**
- * Transcribe audio using OpenAI Whisper API
+ * Transcribe audio using Gemini GenAI SDK (PRIMARY)
  */
-async function transcribeWithAPI(filePath: string): Promise<TranscriptResult> {
+async function transcribeWithGemini(filePath: string): Promise<TranscriptResult> {
+  console.log("Transcribing with Gemini GenAI SDK...");
+
+  const responseText = await geminiTranscribeAudio(filePath);
+
+  // Parse the JSON response
+  let result: any;
   try {
-    console.log("Transcribing with OpenAI Whisper API...");
-    
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
-      model: "whisper-1",
-      response_format: "verbose_json",
-      timestamp_granularities: ["segment"],
-    });
-
-    // Map segments to our format
-    const segments = (transcription.segments || []).map((seg: any) => ({
-      start: seg.start,
-      end: seg.end,
-      text: seg.text.trim(),
-    }));
-
-    return {
-      text: transcription.text || "",
-      segments: segments,
-    };
-
-  } catch (error: any) {
-    console.error("OpenAI Whisper API error:", error.message);
-    throw error;
+    result = JSON.parse(responseText);
+  } catch {
+    // Try to extract JSON from markdown code blocks
+    const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/) ||
+                      responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      result = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+    } else {
+      throw new Error("Failed to parse Gemini transcription response as JSON");
+    }
   }
+
+  // Validate and normalize the response
+  if (!result.segments || !Array.isArray(result.segments)) {
+    throw new Error("Gemini response missing segments array");
+  }
+
+  const segments = result.segments.map((seg: any) => ({
+    start: Number(seg.start) || 0,
+    end: Number(seg.end) || 0,
+    text: String(seg.text || "").trim(),
+  }));
+
+  return {
+    text: result.text || segments.map((s: any) => s.text).join(" "),
+    segments,
+  };
 }
 
 /**
- * Main transcription function with automatic fallback
+ * Transcribe audio using OpenAI Whisper API (FALLBACK)
+ */
+async function transcribeWithOpenAI(filePath: string): Promise<TranscriptResult> {
+  const client = await getOpenAIClient();
+  if (!client) throw new Error("OpenAI client not initialized");
+
+  console.log("Transcribing with OpenAI Whisper API (fallback)...");
+
+  const transcription = await client.audio.transcriptions.create({
+    file: fs.createReadStream(filePath),
+    model: "whisper-1",
+    response_format: "verbose_json",
+    timestamp_granularities: ["segment"],
+  });
+
+  const segments = (transcription.segments || []).map((seg: any) => ({
+    start: seg.start,
+    end: seg.end,
+    text: seg.text.trim(),
+  }));
+
+  return {
+    text: transcription.text || "",
+    segments,
+  };
+}
+
+/**
+ * Main transcription function with cascading fallback:
+ * 1. Gemini GenAI SDK (primary)
+ * 2. OpenAI Whisper (fallback)
+ * 3. Heuristic (last resort)
  */
 export async function transcribeAudio(
   audioPath: string
 ): Promise<TranscriptResult> {
-  
-  const hasAPIKey = !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
 
-  if (hasAPIKey) {
+  // Strategy 1: Try Gemini (primary)
+  if (isGeminiConfigured()) {
     try {
-      // Attempt API transcription
-      const result = await transcribeWithAPI(audioPath);
-      
-      // Validate result
+      const result = await transcribeWithGemini(audioPath);
       if (result.segments.length > 0) {
-        console.log(`✓ Successfully transcribed ${result.segments.length} segments`);
+        console.log(`✓ Gemini transcribed ${result.segments.length} segments`);
         return result;
-      } else {
-        console.warn("API returned empty segments, using fallback");
-        return await generateFallbackTranscript(audioPath);
       }
-
+      console.warn("Gemini returned empty segments, trying fallback...");
     } catch (error) {
-      console.error("API transcription failed, using fallback:", error);
-      return await generateFallbackTranscript(audioPath);
+      console.error("Gemini transcription failed:", error);
     }
-  } else {
-    console.log("No API key configured, using fallback transcription");
-    return await generateFallbackTranscript(audioPath);
   }
+
+  // Strategy 2: Try OpenAI (fallback)
+  const oaiClient = await getOpenAIClient();
+  if (oaiClient) {
+    try {
+      const result = await transcribeWithOpenAI(audioPath);
+      if (result.segments.length > 0) {
+        console.log(`✓ OpenAI transcribed ${result.segments.length} segments`);
+        return result;
+      }
+      console.warn("OpenAI returned empty segments, using heuristic fallback");
+    } catch (error) {
+      console.error("OpenAI transcription failed:", error);
+    }
+  }
+
+  // Strategy 3: Heuristic fallback (always works)
+  console.log("Using heuristic fallback transcription");
+  return await generateFallbackTranscript(audioPath);
 }
 
 /**
@@ -215,10 +227,9 @@ export function validateTranscript(transcript: TranscriptResult): boolean {
     return false;
   }
 
-  // Check for reasonable segment durations
   for (const seg of transcript.segments) {
     const duration = seg.end - seg.start;
-    if (duration < 0 || duration > 600) { // Max 10 min per segment
+    if (duration < 0 || duration > 600) {
       console.warn(`Invalid segment duration: ${duration}s`);
       return false;
     }

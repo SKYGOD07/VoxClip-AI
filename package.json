@@ -11,6 +11,8 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
+    "@google/genai": "^1.45.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.4",
@@ -89,6 +91,7 @@
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.0",
     "@types/fluent-ffmpeg": "^2.1.28",
+    "@types/multer": "^2.1.0",
     "@types/node": "20.19.27",
     "@types/passport": "^1.0.16",
     "@types/passport-local": "^1.0.38",

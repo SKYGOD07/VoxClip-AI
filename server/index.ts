@@ -1,7 +1,9 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { setupGeminiLiveProxy } from "./lib/gemini-live";
 
 const app = express();
 const httpServer = createServer(app);
@@ -82,6 +84,9 @@ app.use((req, res, next) => {
   }
 
   const port = parseInt(process.env.PORT || "5000", 10);
+
+  // Setup Gemini Live API WebSocket proxy
+  setupGeminiLiveProxy(httpServer);
 
   // ✅ WINDOWS-SAFE LISTEN
   httpServer.listen(port, () => {

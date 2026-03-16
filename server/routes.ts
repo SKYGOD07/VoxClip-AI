@@ -206,7 +206,7 @@
 //     await storage.updateVideoStatus(videoId, "error");
 //   }
 // }
-import type { Express } from "express";
+import express, { type Express } from "express";
 import { type Server } from "http";
 import multer from "multer";
 import path from "path";
@@ -220,6 +220,8 @@ import {
   validateVideoFile, 
   getVideoDuration 
 } from "./lib/ffmpeg";
+import { isGCSConfigured, uploadVideoToGCS, uploadClipToGCS } from "./lib/gcs";
+import { isGeminiConfigured, geminiProcessVoiceCommand } from "./lib/gemini";
 
 // Configure multer with file size limits
 const upload = multer({
@@ -314,15 +316,33 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid or corrupted video file" });
       }
 
+      // Upload to GCS if configured
+      let videoUrl = req.file.path;
+
+      if (isGCSConfigured()) {
+        try {
+          const gcsResult = await uploadVideoToGCS(
+            req.file.path,
+            Date.now(),
+            req.file.originalname
+          );
+          videoUrl = gcsResult.publicUrl;
+          console.log(`Video uploaded to GCS: ${gcsResult.gcsUri}`);
+        } catch (gcsError: any) {
+          console.warn(`GCS upload failed, using local storage: ${gcsError.message}`);
+        }
+      }
+
       // Create video record
       const video = await storage.createVideo({
         originalName: req.file.originalname,
-        originalUrl: req.file.path,
+        originalUrl: videoUrl,
       });
 
       console.log(`Created video record #${video.id}`);
 
       // Start background processing (non-blocking)
+      // Always process from local file path (it exists from multer)
       processVideo(video.id, req.file.path).catch(async (err) => {
         console.error(`Error processing video ${video.id}:`, err);
         await storage.updateVideoStatus(video.id, "error");
@@ -376,6 +396,42 @@ export async function registerRoutes(
       console.error("Reprocess error:", error);
       res.status(500).json({ message: "Failed to restart processing" });
     }
+  });
+
+  // Voice command processing
+  app.post("/api/voice-command", express.json(), async (req, res) => {
+    try {
+      const { text } = req.body;
+
+      if (!text || typeof text !== "string") {
+        return res.status(400).json({ message: "Text is required" });
+      }
+
+      if (!isGeminiConfigured()) {
+        return res.status(503).json({
+          message: "Gemini API key not configured. Set GEMINI_API_KEY env var.",
+        });
+      }
+
+      console.log(`Processing voice command: "${text}"`);
+      const result = await geminiProcessVoiceCommand(text);
+
+      console.log(`Voice command result: ${JSON.stringify(result)}`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("Voice command error:", error);
+      res.status(500).json({ message: "Failed to process voice command" });
+    }
+  });
+
+  // Health check for Cloud Run
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      gemini: isGeminiConfigured(),
+      gcs: isGCSConfigured(),
+      timestamp: new Date().toISOString(),
+    });
   });
 
   return httpServer;
@@ -458,6 +514,18 @@ async function processVideo(videoId: number, videoPath: string) {
         console.log(`\nCutting clip ${index + 1}/${analyzedClips.length}`);
         await cutClip(videoPath, adjusted.start, adjusted.end, outputPath);
 
+        // Upload clip to GCS if configured
+        let clipUrl = `/clips/${filename}`;
+        if (isGCSConfigured()) {
+          try {
+            const gcsResult = await uploadClipToGCS(outputPath, videoId, index);
+            clipUrl = gcsResult.publicUrl;
+            console.log(`Clip uploaded to GCS: ${gcsResult.gcsUri}`);
+          } catch (gcsError: any) {
+            console.warn(`GCS clip upload failed, using local: ${gcsError.message}`);
+          }
+        }
+
         // Save to database
         await storage.createClip({
           videoId,
@@ -465,7 +533,7 @@ async function processVideo(videoId: number, videoPath: string) {
           endTime: adjusted.end,
           summary: clip.summary,
           viralityScore: clip.score,
-          url: `/clips/${filename}`,
+          url: clipUrl,
         });
 
         successfulClips++;
